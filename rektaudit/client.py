@@ -1,4 +1,4 @@
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import base64
 import json
@@ -42,6 +42,8 @@ class RektauditClient:
         "DECISION_NOT_COMMITTED_YET",
     }
 
+    DEFAULT_AGENT_NAME = "default-agent"
+
     def __init__(
         self,
         private_key_b64: str,
@@ -71,6 +73,9 @@ class RektauditClient:
 
         if api_key:
             self.session.headers["X-API-Key"] = api_key
+            if not self.default_organization_id:
+                org = self.get_or_create_org()
+                self._log(f"Using organization: {org['id']}")
 
         if False:
             self.session = requests.Session()
@@ -271,6 +276,35 @@ class RektauditClient:
 
         raise RuntimeError("Agent create + lookup failed")
 
+    def ensure_agent(
+        self,
+        name: str = DEFAULT_AGENT_NAME,
+        organization_id: str | None = None,
+        declared_max_risk: float = 1.0,
+        declared_leverage_limit: float = 1.0,
+    ) -> str:
+
+        if self._agent_id_cache:
+            return self._agent_id_cache
+
+        return self.register_or_get_agent(
+            name,
+            organization_id=organization_id,
+            declared_max_risk=declared_max_risk,
+            declared_leverage_limit=declared_leverage_limit,
+        )
+
+    def _ensure_agent_for_submit(self, agent_name: str = DEFAULT_AGENT_NAME) -> None:
+
+        if self._agent_id_cache:
+            return
+
+        self._log(
+            f"No agent registered; auto-registering '{agent_name}' "
+            "(call ensure_agent() to choose a name)"
+        )
+        self.ensure_agent(agent_name)
+
     def submit_event(
         self,
         payload: dict,
@@ -333,6 +367,7 @@ class RektauditClient:
         }
         payload.update(kwargs)
 
+        self._ensure_agent_for_submit()
         return self.submit_event(payload)
 
     def submit_outcome(
@@ -363,4 +398,5 @@ class RektauditClient:
 
         payload.update(kwargs)
 
+        self._ensure_agent_for_submit()
         return self.submit_event(payload, retry=retry)
