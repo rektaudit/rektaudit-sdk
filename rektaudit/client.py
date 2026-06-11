@@ -1,4 +1,4 @@
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import base64
 import json
@@ -74,8 +74,7 @@ class RektauditClient:
         if api_key:
             self.session.headers["X-API-Key"] = api_key
             if not self.default_organization_id:
-                org = self.get_or_create_org()
-                self._log(f"Using organization: {org['id']}")
+                self._resolve_org_from_api_key()
 
         if False:
             self.session = requests.Session()
@@ -187,21 +186,71 @@ class RektauditClient:
             self.default_organization_id = org_id
         return org
 
+    def _org_resolution_hint(self) -> str:
+        return (
+            "Pass default_organization_id=... in RektauditClient(...) "
+            "(your dashboard quickstart includes this UUID)."
+        )
+
+    def _resolve_org_from_api_key(self) -> Dict[str, str]:
+
+        if not self.session.headers.get("X-API-Key"):
+            raise RektauditError(
+                "API_KEY_REQUIRED",
+                f"No API key configured. {self._org_resolution_hint()}",
+            )
+
+        url = f"{self.base_url}/auth/api-key/context"
+
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise RektauditError(
+                "ORG_RESOLUTION_FAILED",
+                f"Could not reach {url}: {exc}. {self._org_resolution_hint()}",
+            )
+
+        if resp.status_code != 200:
+            code = "ORG_RESOLUTION_FAILED"
+            message = resp.text
+            try:
+                data = resp.json()
+                detail = data.get("detail", data)
+                if isinstance(detail, dict):
+                    code = detail.get("code", code)
+                    message = detail.get("message", str(detail))
+                else:
+                    message = str(detail)
+            except Exception:
+                message = f"HTTP {resp.status_code}"
+
+            raise RektauditError(
+                code,
+                f"{message} {self._org_resolution_hint()}",
+                resp.status_code,
+            )
+
+        data = resp.json()
+        org_id = data.get("id") or data.get("organization_id")
+        if not org_id:
+            raise RektauditError(
+                "ORG_RESOLUTION_FAILED",
+                f"API key context missing organization id. {self._org_resolution_hint()}",
+                resp.status_code,
+            )
+
+        org = self._cache_org(str(org_id), name=data.get("name"))
+        self.default_organization_id = str(org_id)
+        self._log(f"Resolved organization {org_id} from API key")
+        return org
+
     def get_or_create_org(self) -> Dict[str, str]:
 
         if self._org_cache:
             return self._org_cache
 
         if self.session.headers.get("X-API-Key"):
-            resp = self.session.get(
-                f"{self.base_url}/auth/api-key/context",
-                timeout=self.timeout,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                org_id = data.get("id") or data.get("organization_id")
-                if org_id:
-                    return self._cache_org(str(org_id), name=data.get("name"))
+            return self._resolve_org_from_api_key()
 
         resp = self.session.get(
             f"{self.base_url}/org/by-public-key/{self.public_key}",

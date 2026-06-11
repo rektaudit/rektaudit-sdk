@@ -18,7 +18,7 @@ pip install "git+https://github.com/rektaudit/rektaudit-sdk.git"
 Pin a tag when releases are published:
 
 ```bash
-pip install "git+https://github.com/rektaudit/rektaudit-sdk.git@v0.1.2"
+pip install "git+https://github.com/rektaudit/rektaudit-sdk.git@v0.1.3"
 ```
 
 Local development checkout:
@@ -31,7 +31,7 @@ pip install -e .
 
 ## Quick example (recommended)
 
-Pass your API key — org and agent setup happen automatically:
+Pass your API key and organization UUID (from the dashboard) — agent setup is automatic:
 
 ```python
 from datetime import datetime, timezone
@@ -40,12 +40,14 @@ from rektaudit import RektauditClient
 
 API_KEY = "ra_YOUR_API_KEY"
 BASE_URL = "https://your-rektaudit-instance.example.com"
+ORGANIZATION_ID = "your-org-uuid"
 
 keys = RektauditClient.generate_keypair()
 client = RektauditClient(
     private_key_b64=keys["private_key"],
     base_url=BASE_URL,
     api_key=API_KEY,
+    default_organization_id=ORGANIZATION_ID,
 )
 
 ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
