@@ -124,7 +124,7 @@ class RektauditClient:
             self.signing_key.sign(body).signature
         ).decode()
 
-    def _post(self, path: str, payload: dict) -> Dict[str, Any]:
+    def _post(self, path: str, payload: dict, *, _org_retry: bool = True) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
 
         body = self._serialize(payload)
@@ -164,6 +164,19 @@ class RektauditClient:
             message = str(detail)
 
         self._log(f"ERROR {code}: {message}")
+
+        if (
+            code == "API_KEY_ORG_MISMATCH"
+            and _org_retry
+            and self.session.headers.get("X-API-Key")
+        ):
+            self._log("Re-resolving organization after API_KEY_ORG_MISMATCH")
+            self._org_cache = None
+            self.default_organization_id = None
+            org = self._resolve_org_from_api_key()
+            refreshed = dict(payload)
+            refreshed["organization_id"] = org["id"]
+            return self._post(path, refreshed, _org_retry=False)
 
         raise RektauditError(code, message, resp.status_code)
 
@@ -324,8 +337,6 @@ class RektauditClient:
         self,
         name: str,
         organization_id: str | None = None,
-        declared_max_risk: float = 1.0,
-        declared_leverage_limit: float = 1.0,
     ):
         if self._agent_id_cache:
             return self._agent_id_cache
@@ -336,8 +347,6 @@ class RektauditClient:
             "organization_id": org_id,
             "name": name,
             "public_key": self.public_key,
-            "declared_max_risk": declared_max_risk,
-            "declared_leverage_limit": declared_leverage_limit,
         }
 
         try:
@@ -371,8 +380,6 @@ class RektauditClient:
         self,
         name: str = DEFAULT_AGENT_NAME,
         organization_id: str | None = None,
-        declared_max_risk: float = 1.0,
-        declared_leverage_limit: float = 1.0,
     ) -> str:
 
         if self._agent_id_cache:
@@ -381,8 +388,6 @@ class RektauditClient:
         return self.register_or_get_agent(
             name,
             organization_id=organization_id,
-            declared_max_risk=declared_max_risk,
-            declared_leverage_limit=declared_leverage_limit,
         )
 
     def _ensure_agent_for_submit(self, agent_name: str = DEFAULT_AGENT_NAME) -> None:

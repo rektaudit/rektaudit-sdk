@@ -98,14 +98,10 @@ class Client:
     def register_agent(
         self,
         name: str,
-        declared_max_risk: float,
-        declared_leverage_limit: float,
     ):
         payload = {
             "name": name,
             "public_key": self.public_key,
-            "declared_max_risk": declared_max_risk,
-            "declared_leverage_limit": declared_leverage_limit,
         }
 
         response = requests.post(
