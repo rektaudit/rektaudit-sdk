@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 import base64
 import json
@@ -48,10 +48,13 @@ class RektauditClient:
         base_url: str = "http://localhost:8000",
         timeout: float = 10.0,
         debug: bool = True,
+        api_key: str | None = None,
+        default_organization_id: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.debug = debug
+        self.default_organization_id = default_organization_id
 
         self.signing_key = SigningKey(base64.b64decode(private_key_b64))
         self.public_key = base64.b64encode(
@@ -59,11 +62,15 @@ class RektauditClient:
         ).decode()
 
         self._agent_id_cache = None
+        self._org_cache: Dict[str, str] | None = None
 
         self.session = requests.Session()
         self.session.headers.update({
             "Connection": "close"
         })
+
+        if api_key:
+            self.session.headers["X-API-Key"] = api_key
 
         if False:
             self.session = requests.Session()
@@ -152,37 +159,85 @@ class RektauditClient:
 
         raise RektauditError(code, message, resp.status_code)
 
-    def get_or_create_org(self):
-        resp = self.session.get(f"{self.base_url}/org/by-public-key/{self.public_key}", timeout=5)
+    def _resolve_organization_id(self, organization_id: str | None) -> str:
+
+        resolved = organization_id or self.default_organization_id
+        if not resolved:
+            raise RektauditError(
+                "ORGANIZATION_ID_REQUIRED",
+                "Pass organization_id or set default_organization_id (e.g. via get_or_create_org()).",
+            )
+        return resolved
+
+    def _cache_org(self, org_id: str, *, name: str | None = None) -> Dict[str, str]:
+
+        org = {
+            "id": org_id,
+            "organization_id": org_id,
+        }
+        if name:
+            org["name"] = name
+        self._org_cache = org
+        if not self.default_organization_id:
+            self.default_organization_id = org_id
+        return org
+
+    def get_or_create_org(self) -> Dict[str, str]:
+
+        if self._org_cache:
+            return self._org_cache
+
+        if self.session.headers.get("X-API-Key"):
+            resp = self.session.get(
+                f"{self.base_url}/auth/api-key/context",
+                timeout=self.timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                org_id = data.get("id") or data.get("organization_id")
+                if org_id:
+                    return self._cache_org(str(org_id), name=data.get("name"))
+
+        resp = self.session.get(
+            f"{self.base_url}/org/by-public-key/{self.public_key}",
+            timeout=self.timeout,
+        )
 
         if resp.status_code == 200:
-            return resp.json()["organization_id"]
+            data = resp.json()
+            org_id = data.get("organization_id") or data.get("id")
+            if org_id:
+                return self._cache_org(str(org_id), name=data.get("name"))
 
         payload = {
             "name": "SDK Org",
-            "owner_public_key": self.public_key
+            "owner_public_key": self.public_key,
         }
 
         resp = self.session.post(
             f"{self.base_url}/org/",
             json=payload,
-            timeout=5,
+            timeout=self.timeout,
         )
         resp.raise_for_status()
-        return resp.json()["organization_id"]
+        data = resp.json()
+        org_id = data.get("organization_id") or data.get("id")
+        return self._cache_org(str(org_id))
 
     def register_or_get_agent(
         self,
-        organization_id: str,
         name: str,
+        organization_id: str | None = None,
         declared_max_risk: float = 1.0,
         declared_leverage_limit: float = 1.0,
     ):
         if self._agent_id_cache:
             return self._agent_id_cache
 
+        org_id = self._resolve_organization_id(organization_id)
+
         payload = {
-            "organization_id": organization_id,
+            "organization_id": org_id,
             "name": name,
             "public_key": self.public_key,
             "declared_max_risk": declared_max_risk,
@@ -261,7 +316,7 @@ class RektauditClient:
     def submit_decision(
         self,
         *,
-        organization_id: str,
+        organization_id: str | None = None,
         scenario_hash: Optional[str] = None,
         context_json: Optional[dict] = None,
         ts: Optional[str] = None,
@@ -269,7 +324,7 @@ class RektauditClient:
         **kwargs,
     ):
         payload = {
-            "organization_id": organization_id,
+            "organization_id": self._resolve_organization_id(organization_id),
             "event_type": "decision",
             "scenario_hash": scenario_hash,
             "context_json": context_json,
@@ -283,7 +338,7 @@ class RektauditClient:
     def submit_outcome(
         self,
         *,
-        organization_id: str,
+        organization_id: str | None = None,
         decision_event_hash: str,
         outcome_type: str,
         outcome_value: float,
@@ -293,7 +348,7 @@ class RektauditClient:
         **kwargs,
     ):
         payload = {
-            "organization_id": organization_id,
+            "organization_id": self._resolve_organization_id(organization_id),
             "event_type": "outcome",
             "decision_event_hash": decision_event_hash,
             "outcome_type": outcome_type,
